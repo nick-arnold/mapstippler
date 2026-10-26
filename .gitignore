@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+.venv/
+venv/
+reference/ccvt_*.h
+reference/ccvt_reference
+examples/*.png
+!examples/oversampling_comparison.png
+!examples/fast_vs_baseline.png
+!examples/pooling_comparison.png
