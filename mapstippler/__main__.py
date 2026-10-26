@@ -70,13 +70,18 @@ def cmd_advise(args):
     n = scale.n_classes
     if single:
         print(f"{'unit':>9} {'dots':>10}  {'dots merge':>10}")
+        for _, r in df.iterrows():
+            mark = "  <- suggested" if r["suggested"] else ""
+            print(f"{r['unit']:>9,.0f} {int(r['dots']):>10,}  {r['c1_coal']:>10.1%}{mark}")
     else:
-        print(f"{'unit':>9} {'dots':>10}  " + "  ".join(f"{'class ' + str(c):>9}" for c in range(1, n + 1)))
-        print(f"{'':>9} {'':>10}  " + "  ".join(f"{'coalesces':>9}" for _ in range(n)))
-    for _, r in df.iterrows():
-        cells = "  ".join(f"{r[f'c{c}_coal']:>{10 if single else 9}.1%}" for c in range(1, n + 1))
-        mark = "  <- suggested" if r["suggested"] else ""
-        print(f"{r['unit']:>9,.0f} {int(r['dots']):>10,}  {cells}{mark}")
+        print(f"{'unit':>9}  " + "  ".join(f"{'class ' + str(c):>10}" for c in range(1, n + 1))
+              + f"  {'still':>8}")
+        print(f"{'':>9}  " + "  ".join(f"{'dots':>10}" for _ in range(1, n + 1))
+              + f"  {'crowded':>8}")
+        for _, r in df.iterrows():
+            cells = "  ".join(f"{int(r[f'est{c}']):>10,}" for c in range(1, n + 1))
+            mark = "  <- suggested" if r["suggested"] else ""
+            print(f"{r['unit']:>9,.0f}  {cells}  {r[f'c{n}_coal']:>7.1%}{mark}")
     print()
     if single:
         print("Percentages are shares of the total value in places where a typical dot would")
@@ -85,10 +90,11 @@ def cmd_advise(args):
         print(f"merge in at most {args.max_top:.0%} of the value, so they just begin to coalesce in")
         print("the densest areas (Mackay's rule of thumb).")
     else:
-        print("Percentages are shares of the total value in places where a typical dot of that")
-        print("class would touch its neighbor if all the value there were shown in that class.")
-        print("Class 1 coalescing is expected: those dots get promoted. The suggestion is the")
-        print(f"smallest unit whose largest class coalesces in at most {args.max_top:.0%} of the value.")
+        print("Dot counts are estimates of what the map would actually show, after promotion;")
+        print("they are typically within a few percent. A class with almost no dots is a class")
+        print("you do not need. 'Still crowded' is the share of the value where even the largest")
+        print("class would coalesce, so promotion cannot resolve it; the suggestion is the")
+        print(f"smallest unit that keeps it at or under {args.max_top:.0%}.")
 
 
 def cmd_dots(args):

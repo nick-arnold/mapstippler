@@ -59,3 +59,60 @@ def test_single_class_keeps_the_search_radius():
 def test_single_class_without_radii_still_uses_diameters():
     s = MapScale(100.0).single_class()
     assert s.radii_px is None and s.radius_px(0) == s.sizes_px[0]
+
+
+def test_touching_share_curve_is_monotonic_and_bounded():
+    from mapstippler.advisor import touching_share
+
+    ratios = np.linspace(0, 2, 50)
+    share = touching_share(ratios)
+    assert share[0] == 0 and share[-1] == 1
+    assert np.all(np.diff(share) >= 0)
+    # blue noise keeps its distance: almost nothing touches at half the spacing,
+    # and almost everything does at a full spacing
+    assert touching_share(0.5) < 0.02
+    assert touching_share(1.0) > 0.95
+
+
+def test_estimated_dot_counts_are_close_to_a_real_run():
+    import geopandas as gpd
+    import shapely
+    from mapstippler.advisor import density_sample, estimate_dots_by_class
+    from mapstippler.graduated import make_dot_map
+
+    rng = np.random.default_rng(0)
+    n, cell = 16, 12_000.0
+    polys, vals = [], []
+    c = (n - 1) / 2
+    for i in range(n):
+        for j in range(n):
+            polys.append(shapely.box(i * cell, j * cell, (i + 1) * cell, (j + 1) * cell))
+            r2 = ((i - c) ** 2 + (j - c) ** 2) / (n / 4) ** 2
+            vals.append(int(700_000 * np.exp(-r2) + rng.integers(1_500, 25_000)))
+    g = gpd.GeoDataFrame({"pop": vals}, geometry=polys, crs="ESRI:102008")
+    scale = MapScale(300.0)
+
+    xy, w = density_sample(g.geometry.values, g["pop"].to_numpy(float), n_sample=200_000)
+    est = estimate_dots_by_class(xy, w, 1000, scale)
+    r = make_dot_map(g, "pop", 1000, scale, rng=1, progress=None)
+    actual = [int((r.dots["class"] == k + 1).sum()) for k in range(scale.n_classes)]
+
+    assert est[0] == pytest.approx(actual[0], rel=0.10)     # the class that dominates
+    assert est[1] == pytest.approx(actual[1], rel=0.25)
+    assert sum(est) > 0 and len(est) == scale.n_classes
+
+
+def test_estimate_conserves_value():
+    """Whatever the split across classes, the dots must add up to the total."""
+    import geopandas as gpd
+    import shapely
+    from mapstippler.advisor import density_sample, estimate_dots_by_class
+
+    polys = [shapely.box(i * 10_000, 0, (i + 1) * 10_000, 10_000) for i in range(20)]
+    vals = [200_000] * 20
+    g = gpd.GeoDataFrame({"pop": vals}, geometry=polys, crs="ESRI:102008")
+    scale = MapScale(200.0)
+    xy, w = density_sample(g.geometry.values, np.array(vals, float), n_sample=100_000)
+    est = estimate_dots_by_class(xy, w, 500, scale)
+    represented = sum(n * scale.value(500, c) for c, n in enumerate(est))
+    assert represented == pytest.approx(sum(vals), rel=0.02)

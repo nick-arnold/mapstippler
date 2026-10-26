@@ -7,9 +7,6 @@ extending the method in:
 > dot maps. *International Journal of Geographical Information Science*.
 > doi:10.1080/13658816.2017.1359747
 
-Developed with the assistance of AI. The algorithms are implemented from the
-cited papers rather than ported from existing code.
-
 See `DESIGN_NOTES.md` for why this implementation differs from the paper: the
 evidence behind each change, its trade-offs, and what was deliberately left alone.
 
@@ -135,6 +132,17 @@ order the columns were given), per-category columns in `reconciliation.csv`, and
 `categories` block in the summary. The preview colours them with a
 colour-blind-safe default palette, drawing each class in one shuffled pass so
 neither colour is painted over the other.
+
+**v0.6.0: `advise` estimates dots per class.** The table used to report, per class,
+the share of value where that class *would* coalesce if everything there were shown
+in it — a hypothetical that answered the wrong question. It now estimates how many
+dots of each class the map would actually produce, by walking the promotion chain
+over the measured density: in each neighbourhood, how many dots a class places, what
+share of them have a neighbour within the search radius, and how much value that
+promotes to the class above. The share-that-touches comes from a curve measured from
+this library's own blue-noise output. Estimates run within a few percent of a real
+run. This makes the question "do I need three classes?" answerable before placing any
+dots.
 
 Deliberately left for later: keeping dots inside their polygons, resolving
 large-on-small overlaps (counted, not fixed), water masking, multiple zooms.

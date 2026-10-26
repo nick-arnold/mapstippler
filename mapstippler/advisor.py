@@ -41,10 +41,72 @@ from .sampling import random_points_in_polygons
 from .scale import MapScale
 
 __all__ = ["TOUCH", "COALESCE", "density_sample", "coalescing_share",
-           "candidate_unit_values", "advise", "ink_report"]
+           "candidate_unit_values", "advise", "ink_report", "touching_share",
+           "estimate_dots_by_class"]
 
 TOUCH = 0.5       # d / s at which some dots start to touch
 COALESCE = 0.8    # d / s at which a typical dot touches its neighbor
+
+# What share of dots in a CCVT blue-noise pattern have a neighbour closer than
+# d, as a function of d / s, where s is the mean spacing sqrt(area / n).
+# Measured from this library's own output: 4,000 dots at k0 = 16, interior only.
+# The transition is sharp, which is the point of blue noise: dots keep their
+# distance until the pattern is genuinely too crowded to.
+_NN_RATIO = np.array([0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5,
+                      0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0,
+                      1.05, 1.1, 1.15, 1.2, 1.25, 1.3])
+_NN_SHARE = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0007, 0.0007, 0.0014,
+                      0.0064, 0.0233, 0.0676, 0.1496, 0.2851, 0.4719, 0.6671, 0.8207,
+                      0.9172, 0.9699, 0.9894, 0.9972, 0.9993, 1.0, 1.0, 1.0])
+
+
+def touching_share(ratio):
+    """Share of blue-noise dots with a neighbour closer than `ratio` x mean spacing."""
+    return np.interp(ratio, _NN_RATIO, _NN_SHARE, left=0.0, right=1.0)
+
+
+def estimate_dots_by_class(xy, point_value: float, unit: float, scale: MapScale,
+                           window: float = 3.0):
+    """Estimate how many dots of each class a unit value would produce.
+
+    Walks the promotion chain the way the pipeline does, but over densities
+    rather than placed dots. `xy` is a sample of points drawn in proportion to
+    value (see `density_sample`), each standing for `point_value`.
+
+    For each class in turn, the sample is gridded into neighbourhoods a few dots
+    wide. In a neighbourhood of area A holding value V, a class with dot value u
+    places n = V / u dots at mean spacing s = sqrt(A / n), and the share of them
+    with a neighbour inside the class's search radius is what gets promoted. That
+    share of the value is carried up to the next class, and the rest stays. Each
+    class is gridded at its own size, since a larger dot's neighbourhood is
+    larger.
+
+    An estimate, not a simulation: it assumes dots spread evenly within a
+    neighbourhood and ignores how merged dots are pooled into groups before
+    promotion, so counts are approximate. It is for choosing a unit value, not
+    for reporting.
+    """
+    xy = np.asarray(xy, dtype=np.float64)
+    weight = np.full(xy.shape[0], float(point_value))   # value each point still carries
+    origin = xy.min(axis=0)
+    counts = []
+    for c in range(scale.n_classes):
+        u = scale.value(unit, c)
+        if c == scale.n_classes - 1:
+            counts.append(weight.sum() / u)             # nothing above to promote into
+            break
+        cell = window * scale.diameter(c)
+        ij = np.floor((xy - origin) / cell).astype(np.int64)
+        key = ij[:, 0] * (ij[:, 1].max() + 2) + ij[:, 1]
+        cell_id, inverse = np.unique(key, return_inverse=True)
+        value_in_cell = np.bincount(inverse, weight, cell_id.size)
+
+        n = value_in_cell / u
+        spacing = np.sqrt(np.divide(cell * cell, n, out=np.full_like(n, np.inf), where=n > 0))
+        share = touching_share(scale.search_radius(c) / spacing)
+        counts.append(float((n * (1.0 - share)).sum()))
+        weight = weight * share[inverse]                # carry the promoted value up
+    return [int(round(x)) for x in counts]
 
 
 def density_sample(geoms, values, n_sample: int = 1_000_000, rng=0):
@@ -116,6 +178,7 @@ def advise(geoms, values, scale: MapScale, unit_values=None, k0: int = 16,
     -------
     unit            value of one smallest-class dot
     dots            number of smallest-class dots if nothing were promoted
+    estN            estimated dots of class N that the map would actually show
     cN_touch        share of total value where class N starts touching
     cN_coal         share of total value where class N coalesces
     max_round       largest per-polygon rounding error, in value units
@@ -132,6 +195,8 @@ def advise(geoms, values, scale: MapScale, unit_values=None, k0: int = 16,
     rows = []
     for u in unit_values:
         row = {"unit": u, "dots": int(round(total / u))}
+        for c, n in enumerate(estimate_dots_by_class(xy, w, u, scale)):
+            row[f"est{c + 1}"] = n
         for c in range(scale.n_classes):
             uc, d = scale.value(u, c), scale.search_radius(c)
             row[f"c{c + 1}_touch"] = coalescing_share(xy, w, uc, d, window, TOUCH)
