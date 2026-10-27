@@ -1,6 +1,6 @@
 # mapstippler
 
-Dot maps for Python: pseudo-random, blue-noise, and graduated.
+Dot maps for Python: pseudo-random, blue-noise, and graduated dots.
 
 Implements and extends the method in:
 
@@ -12,7 +12,7 @@ Implements and extends the method in:
 
 ## How it works
 
-1. Place pseudo-random dots in each polygon, several for every final dot.
+1. Pseudo-randomly place dots in each polygon.
 2. Reduce them with a capacity-constrained Voronoi tessellation (CCVT). Every dot
    takes the same number of points, so every dot is worth the same and the
    pattern follows the input density without clumping.
@@ -36,12 +36,12 @@ Python 3.9 or newer.
 
 ## Use
 
-Input: a polygon layer in a projected, equal-area coordinate system, with a column
-of counts (not rates or percentages).
+Input: a polygon layer in a equal area coordinate system, with a column
+of counts for the dots (not rates or percentages).
 
 ### Choose a unit value
 
-`advise` estimates what each candidate would produce, without placing dots:
+`advise` estimates a range of unit values without placing dots:
 
 ```
 mapstippler advise tracts.parquet --value population --mpp 500
@@ -62,13 +62,11 @@ about 1,200 pixels; 500 suits a state; 60 suits a city.
 
 ```
 mapstippler dots tracts.parquet --value population --unit 1000 --mpp 500 \
-    --id geoid --nudge all --out mymap --preview
+    --id geoid --nudge all --out [file] --preview
 ```
 
-Writes `dots.gpkg`, a per-polygon reconciliation table, a record of the
-parameters, and a PNG at the true scale. `--format parquet` writes GeoParquet
-instead, which is smaller but which QGIS only reads when its GDAL was built with
-Arrow support.
+Writes `dots.gpkg`, a record of the parameters, and a PNG at the true scale. `--format parquet` writes GeoParquet
+instead, which is smaller.
 
 ### Other methods
 
@@ -77,22 +75,21 @@ mapstippler dots tracts.parquet --value population --unit 1000 --mpp 500 --metho
 mapstippler dots tracts.parquet --value population --unit 1000 --mpp 500 --method random
 ```
 
-`blue` is one dot size, blue-noise placed. `random` is pseudo-random placement
-with no optimisation.
+`blue` is one dot size in a blue noise pattern. `random` is pseudo-random placement.
 
-### Two colours
+### Two colors
 
-Several columns colour each dot by category, matching each polygon's split:
+Two columns color each dot by category, matching each polygon's split:
 
 ```
-mapstippler dots counties.parquet --value dem rep --unit 10000 --mpp 3800 --preview
+mapstippler dots counties.parquet --value [field 1] [field 2] --unit 10000 --mpp 3800 --preview
 ```
 
-### One state
+### A single feature
 
 ```
 mapstippler dots tracts.parquet --value population --unit 1000 --mpp 500 \
-    --where "statefp == '41'" --out oregon --preview
+    --where "statefp == '41'" --out [file] --preview
 ```
 
 ### Python
@@ -112,12 +109,6 @@ write_outputs(result, "mymap/")
 ```
 
 ---
-
-## Documentation
-
-* [PARAMETERS.md](PARAMETERS.md) — every option and when to change it.
-* [DESIGN_NOTES.md](DESIGN_NOTES.md) — how this differs from the 2017 paper.
-* [CHANGELOG.md](CHANGELOG.md) — what changed at each version.
 
 ## License
 
