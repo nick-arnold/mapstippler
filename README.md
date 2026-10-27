@@ -36,7 +36,7 @@ Python 3.9 or newer.
 
 ## Use
 
-Input: a polygon layer in a equal area coordinate system, with a column
+Input: a polygon layer in an **equal area coordinate system**, with a column
 of counts for the dots (not rates or percentages).
 
 ### Choose a unit value
