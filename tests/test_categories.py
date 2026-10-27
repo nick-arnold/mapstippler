@@ -101,7 +101,7 @@ def test_cli_and_preview(tmp_path):
     out = tmp_path / "run"
     main(["dots", str(src), "--value", "dem", "rep", "--unit", "2000", "--mpp", "700",
           "--id", "geoid", "--out", str(out), "--preview"])
-    d = gpd.read_parquet(out / "dots.parquet")
+    d = gpd.read_file(out / "dots.gpkg", layer="dots")
     assert set(d["category"].unique()) == {"dem", "rep"}
     assert (out / "preview.png").exists()
 

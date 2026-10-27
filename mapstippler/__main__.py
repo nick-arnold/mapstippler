@@ -111,7 +111,7 @@ def cmd_dots(args):
                        else float(args.group_radius),
                        nudge=args.nudge, nudge_max=args.nudge_max)
     out = Path(args.out)
-    paths = write_outputs(res, out, fmt=args.format)
+    paths = write_outputs(res, out, fmt=args.format, scale=scale)
     print("wrote " + ", ".join(str(p) for p in paths))
     s = res.summary
     print(f"dots by class: {s['dots_by_class']}")
@@ -124,6 +124,14 @@ def cmd_dots(args):
           f"outside their source polygon; median {dr['displacement_px_median_of_outside']:.2f} px, "
           f"95th percentile {dr['displacement_px_p95_of_outside']:.2f} px beyond its edge; "
           f"{dr['dots_in_no_polygon']:,} in no polygon")
+    acc = s.get("accuracy") or {}
+    if acc.get("final"):
+        def fmt(a):
+            return (f"median {a['median_dots']:.2f}, 90th {a['p90_dots']:.2f}, "
+                    f"max {a['max_dots']:.1f} dots; {a['within_one_dot']:.0%} within one dot")
+        if acc.get("placement"):
+            print(f"accuracy, placement only: {fmt(acc['placement'])}")
+        print(f"accuracy, as mapped      : {fmt(acc['final'])}")
     if s["overlapping_dots"]:
         nonzero = {k: v for k, v in s["overlapping_dots"].items() if v}
         print(f"overlapping dots: {nonzero or 'none'}")
@@ -175,7 +183,9 @@ def main(argv=None):
                    help="pool touching dots within this many larger-class diameters "
                         "(0 = only directly touching; 'global' = whole map, as in the 2017 paper)")
     d.add_argument("--out", default="mapstippler_output", help="output folder")
-    d.add_argument("--format", choices=["parquet", "gpkg"], default="parquet")
+    d.add_argument("--format", choices=["gpkg", "parquet"], default="gpkg",
+                   help="output format for the dots. GeoPackage by default, which every "
+                        "QGIS reads; GeoParquet is smaller but needs GDAL built with Arrow")
     d.add_argument("--preview", action="store_true", help="also render preview.png at the true zoom")
     d.add_argument("--outlines", default="input",
                    help="preview outlines: 'input' (default), 'none', or a path to another polygon file")

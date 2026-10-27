@@ -258,14 +258,22 @@ density — useful when a dot happens to land somewhere awkward.
 ### `--out`
 Output folder. Default `mapstippler_output`. Contains:
 
-* `dots.parquet` (or `.gpkg`) — the dot layer
+* `dots.gpkg` (or `.parquet`) — the dot layer
 * `reconciliation.csv` — per polygon: its value against the value of the dots
   inside it
 * `run.json` — every parameter, the summary, timings
 
 ### `--format`
-`parquet` (default) or `gpkg`. GeoPackage if you want to double-click it into
-QGIS; GeoParquet is smaller and faster for large outputs.
+`gpkg` (default) or `parquet`.
+
+GeoPackage because every QGIS reads it. QGIS reads GeoParquet only when its GDAL
+was built with Arrow support, which many builds leave out because the Arrow
+library is large — and it fails quietly, with the format simply absent from the
+driver list. Use `parquet` when the output is headed for Python or the web, where
+it is smaller and faster to read.
+
+Note this is the *output* format only. Input is read with GeoPandas, which reads
+GeoParquet regardless of what QGIS can do.
 
 ### `--preview`
 Render `preview.png` at the true scale, with dots at their real pixel sizes and
@@ -335,30 +343,61 @@ Columns on each dot:
 
 | column | meaning |
 |---|---|
+| `dot_id` | row number |
 | `class` | 1 = smallest |
 | `value` | what this dot represents; always exact for its class |
 | `size_px` | diameter in CSS pixels |
 | `source_id` | the polygon that contributed most of its points |
 | `category` | for categorised maps |
-| `purity` | share of its points from that one polygon; 1.0 = all |
-| `inside_source` | whether it ended up inside its source polygon |
-| `displacement_px` | how far beyond that polygon's edge, if outside |
-| `spread_px` | how far the points it stands for lie from it |
-| `nudge_px` | how far nudging moved it |
 
-**`spread_px` is the one to check.** A dot standing for points scattered far away
-is a dot in the wrong place. Large values mean something has gone wrong with
-pooling.
+The per-dot diagnostics — how far each dot drifted, how scattered the value it
+stands for was, how far nudging moved it — are summarised in `run.json` under
+`per_dot` rather than written onto every dot, since they judge a run rather than
+draw it.
 
-**Do not be alarmed by `inside_source`.** On a national tract map, 85% of dot value
+### `reconciliation.csv`
+
+One row per polygon, comparing what the data says with what the map shows:
+
+| column | meaning |
+|---|---|
+| `value` | the polygon's actual value |
+| `value_of_dots_inside` | value of the dots that ended up inside it |
+| `difference` | the two subtracted; **this is the error** |
+| `value_inside_before_promotion` | the same, measured before promotion |
+| `difference_before_promotion` | **placement error on its own** |
+| `dots_sourced` | dots built mostly from this polygon's value |
+| `classN_dots_inside` | dots of each class sitting inside it |
+
+**Read `difference` against your unit value, not in absolute terms.** At 10,000
+per dot, a difference of 8,000 is less than one dot.
+
+**The two differences measure different things, and the gap between them is the
+price of graduated dots.** Before promotion every dot is worth one unit, so a dot
+crossing a boundary takes one unit with it: that is placement error, and it stays
+small. After promotion a single dot can be worth 100 units and sits at the centre
+of the cluster it replaced, so if that centre lands just across a line, the whole
+100 units goes with it. On a typical run the median hardly changes while the worst
+case grows by a factor of twenty or more. Nothing has gone wrong — the map shows
+the same density with coarser tokens — but it is worth seeing the two separately.
+
+The summary in `run.json` reports both as `accuracy.placement` and
+`accuracy.final`, in units of dots.
+
+**`per_dot.spread_px` is the one to check.** A dot standing for points scattered
+far away is a dot in the wrong place. A large maximum means something has gone
+wrong with pooling.
+
+**Do not be alarmed by `per_dot.dots_inside_source`.** On a national tract map, 85% of dot value
 can sit outside its source polygon, which sounds terrible and is not: half of those
 dots are within half a pixel of the polygon's edge. A dot built from 16 points
 drawn from several tiny tracts cannot be inside all of them. Look at
 `displacement_px` instead, which is in pixels and tells you whether it is visible.
 
-### Styling in QGIS
+### QGIS
 
-Set symbol size in **map units**, equal to `size_px × m_per_px`. With
-`--sizes 2 4.5 10` at `--mpp 3800`, that is 7,600 / 17,100 / 38,000 map units. The
-dots then draw at the intended size whatever the zoom, and the map looks right at
-the scale it was made for.
+A GeoPackage carries its own style, so the layer opens already symbolised to match
+the preview: one symbol per class (and per category, for a two-colour map), sized
+in **map units** at `size_px × m_per_px`, with the dot values as legend labels.
+The dots then draw at their intended size whatever the zoom. The same style is
+written alongside as `dots.qml` if you want to apply it by hand.

@@ -48,7 +48,7 @@ def test_pipeline_conserves_value_and_accounts_for_every_dot(method):
     assert r.dots["value"].sum() == pytest.approx(n_dots * 1000)
     assert r.summary["value_of_all_dots"] == pytest.approx(n_dots * 1000)
     assert set(r.dots["source_id"]) <= set(g["gid"])
-    assert r.dots["purity"].between(0, 1).all()
+    assert 0 <= r.summary["per_dot"]["purity"]["min"] <= 1
     if method == "graduated":
         assert r.dots["class"].max() >= 2                     # something got promoted
         for cls, v in ((1, 1_000), (2, 10_000), (3, 100_000)):
@@ -73,7 +73,7 @@ def test_outputs_and_preview(tmp_path):
     g = synthetic_grid()
     r = make_dot_map(g, "pop", 1000, SCALE, id_column="gid", rng=3, progress=None)
     dots_path, rec_path, info_path = write_outputs(r, tmp_path)
-    back = gpd.read_parquet(dots_path)
+    back = gpd.read_file(dots_path, layer="dots")
     assert len(back) == len(r.dots) and back.crs == g.crs
     info = json.loads(info_path.read_text())
     assert info["params"]["search_radii_m"][0] == pytest.approx(500.0)
@@ -90,7 +90,7 @@ def test_cli_runs_end_to_end(tmp_path, capsys):
     out = tmp_path / "run"
     main(["dots", str(src), "--value", "pop", "--unit", "1000", "--mpp", "250",
           "--id", "gid", "--out", str(out), "--preview"])
-    assert (out / "dots.parquet").exists() and (out / "preview.png").exists()
+    assert (out / "dots.gpkg").exists() and (out / "preview.png").exists()
 
 
 def test_rejects_geographic_coordinates():
@@ -115,7 +115,7 @@ def test_distant_clusters_never_merge_into_a_dot_between_them():
     assert np.all((x < 10_000) | (x > 193_000))                     # nothing in the gap
     assert (r.dots.loc[r.dots["class"] == 2, "value"] == 10_000).all()
     assert r.dots["value"].sum() == 31_000
-    assert r.dots["spread_px"].max() < 20                           # no dot stands for far-away points
+    assert r.summary["per_dot"]["spread_px"]["max_px"] < 20          # no dot stands for far-away points
 
 
 def test_nudging_the_top_class_resolves_its_overlaps():
@@ -125,8 +125,8 @@ def test_nudging_the_top_class_resolves_its_overlaps():
     assert before.summary["overlapping_dots"]["class3_with_class3"] > 0
     assert after.summary["overlapping_dots"]["class3_with_class3"] == 0
     d = after.dots
-    assert (d.loc[d["class"] < 3, "nudge_px"] == 0).all()              # only the largest class moves
-    assert d.loc[d["class"] == 3, "nudge_px"].max() <= 6.0 + 1e-6        # at most one 6 px diameter
+    moved = after.summary["per_dot"]["nudge_px"]
+    assert moved["max_px"] <= 6.0 + 1e-6                                 # at most one 6 px diameter
     assert d["value"].sum() == before.dots["value"].sum()               # values untouched
     assert after.summary["nudge"]["overlapping_after"] == 0
 
@@ -149,7 +149,7 @@ def test_single_class_blue_noise_map_and_advice(tmp_path, capsys):
     run = tmp_path / "blue"
     main(["dots", str(src), "--value", "pop", "--unit", "2000", "--mpp", "250", "--method", "blue",
           "--sizes", "2", "--out", str(run)])
-    d = gpd.read_parquet(run / "dots.parquet")
+    d = gpd.read_file(run / "dots.gpkg", layer="dots")
     assert (d["class"] == 1).all() and (d["value"] == 2000).all() and (d["size_px"] == 2).all()
 
 
@@ -192,3 +192,151 @@ def test_dots_state_object_tracks_points_through_promotion():
     assert np.all(d.point_dot == 4)
     d.keep_only(np.array([4]))
     assert d.n == 1 and np.all(d.point_dot == 0) and d.value[0] == 40.0
+
+
+def test_placement_accuracy_is_reported_separately_from_promotion():
+    """Before promotion every dot is worth one unit, so a dot crossing a boundary
+    moves one unit. After promotion a single dot can carry 100 units across, which
+    is a property of the method, not of how well the dots were placed. The summary
+    must separate the two."""
+    g = synthetic_grid()
+    r = make_dot_map(g, "pop", 1000, SCALE, id_column="gid", rng=1, progress=None)
+    acc = r.summary["accuracy"]
+    assert acc["placement"] is not None and acc["final"] is not None
+
+    rec = r.reconciliation
+    assert "difference_before_promotion" in rec
+    # placement error is bounded: a polygon can only lose or gain whole unit-value
+    # dots, so the worst case stays modest
+    assert acc["placement"]["max_dots"] < acc["final"]["max_dots"]
+    assert acc["placement"]["median_dots"] <= acc["final"]["median_dots"] + 1e-9
+
+
+def test_before_promotion_column_accounts_for_the_whole_total():
+    g = synthetic_grid()
+    r = make_dot_map(g, "pop", 1000, SCALE, id_column="gid", rng=2, progress=None)
+    rec = r.reconciliation
+    # every dot is inside some polygon in this synthetic grid, so the
+    # pre-promotion values must add up to the value of all the dots
+    assert rec["value_inside_before_promotion"].sum() == pytest.approx(
+        r.summary["value_of_all_dots"], rel=1e-9)
+
+
+def test_single_class_maps_have_no_separate_placement_figure():
+    g = synthetic_grid()
+    r = make_dot_map(g, "pop", 1000, SCALE, method="blue", rng=3, progress=None)
+    # nothing is promoted, so placement and final are the same thing
+    assert r.summary["accuracy"]["placement"] is None
+    assert "difference_before_promotion" not in r.reconciliation
+
+
+def test_geopackage_is_the_default_and_round_trips(tmp_path):
+    """QGIS reads GeoPackage everywhere; it reads GeoParquet only when its GDAL
+    was built with Arrow, which many builds are not."""
+    g = synthetic_grid()
+    r = make_dot_map(g, "pop", 1000, SCALE, id_column="gid", rng=1, progress=None)
+    dots_path, _, _ = write_outputs(r, tmp_path)
+    assert dots_path.name == "dots.gpkg"
+    back = gpd.read_file(dots_path, layer="dots")
+    assert len(back) == len(r.dots)
+    assert back.crs == g.crs
+    for col in ("class", "value", "size_px", "source_id"):
+        assert col in back.columns
+
+
+def test_categories_survive_the_geopackage_write(tmp_path):
+    """GeoPackage has no categorical type, so the labels are written as text."""
+    g = synthetic_grid()
+    g["a"] = (g["pop"] * 0.6).astype(int)
+    g["b"] = g["pop"] - g["a"]
+    r = make_dot_map(g, ["a", "b"], 1000, SCALE, id_column="gid", rng=2, progress=None)
+    dots_path, _, _ = write_outputs(r, tmp_path)
+    back = gpd.read_file(dots_path, layer="dots")
+    assert set(back["category"].unique()) == {"a", "b"}
+
+
+def test_geopackage_carries_a_qgis_style(tmp_path):
+    """The layer should open already symbolised, with dots at the size they were
+    designed for. QGIS reads styles from a layer_styles table in the package."""
+    import sqlite3
+    import xml.etree.ElementTree as ET
+
+    g = synthetic_grid()
+    r = make_dot_map(g, "pop", 1000, SCALE, id_column="gid", rng=1, progress=None)
+    dots_path, _, _ = write_outputs(r, tmp_path, scale=SCALE)
+
+    con = sqlite3.connect(dots_path)
+    rows = con.execute("SELECT f_table_name, useAsDefault, styleQML FROM layer_styles").fetchall()
+    con.close()
+    assert len(rows) == 1 and rows[0][0] == "dots" and rows[0][1] == 1
+
+    qml = rows[0][2]
+    root = ET.fromstring(qml[qml.index("<qgis"):])          # must be valid XML
+    rules = root.findall(".//rule")
+    assert len(rules) == len(r.dots["class"].unique())
+
+    # sizes are in map units, equal to the dot's CSS pixels times meters per pixel
+    sizes = sorted(float({o.get("name"): o.get("value")
+                          for o in s.findall(".//Option[@name]")}["size"])
+                   for s in root.findall(".//symbol"))
+    expected = sorted(SCALE.sizes_px[c - 1] * SCALE.m_per_px
+                      for c in sorted(r.dots["class"].unique()))
+    assert sizes == pytest.approx(expected)
+    assert (tmp_path / "dots.qml").exists()                  # and alongside, for other tools
+
+
+def test_style_has_one_rule_per_class_and_category():
+    from mapstippler.output import style_qml
+    import xml.etree.ElementTree as ET
+
+    g = synthetic_grid()
+    g["a"] = (g["pop"] * 0.6).astype(int)
+    g["b"] = g["pop"] - g["a"]
+    r = make_dot_map(g, ["a", "b"], 1000, SCALE, id_column="gid", rng=2, progress=None)
+    qml = style_qml(r, SCALE)
+    root = ET.fromstring(qml[qml.index("<qgis"):])
+    rules = root.findall(".//rule")
+    assert len(rules) == len(r.dots["class"].unique()) * 2
+    colours = {o.get("value") for s in root.findall(".//symbol")
+               for o in s.findall(".//Option[@name='color']")}
+    assert len(colours) == 2                                 # one per category
+
+
+def test_dot_layer_carries_only_what_a_map_needs():
+    """Diagnostics belong in the run record, not on every dot."""
+    g = synthetic_grid()
+    r = make_dot_map(g, "pop", 1000, SCALE, id_column="gid", rng=1, progress=None)
+    assert set(r.dots.columns) == {"dot_id", "class", "value", "size_px",
+                                   "source_id", "geometry"}
+    per_dot = r.summary["per_dot"]
+    for key in ("spread_px", "displacement_px", "purity"):
+        assert key in per_dot
+
+
+def test_geopackage_carries_a_qgis_style(tmp_path):
+    """The layer should open already symbolised, with dots at the size they were
+    designed for: size_px x m_per_px, in map units."""
+    import sqlite3
+    import xml.etree.ElementTree as ET
+
+    g = synthetic_grid()
+    r = make_dot_map(g, "pop", 1000, SCALE, id_column="gid", rng=1, progress=None)
+    dots_path, _, _ = write_outputs(r, tmp_path, scale=SCALE)
+
+    con = sqlite3.connect(dots_path)
+    try:
+        row = con.execute("SELECT f_table_name, useAsDefault, styleQML "
+                          "FROM layer_styles").fetchone()
+    finally:
+        con.close()
+    assert row[0] == "dots" and row[1] == 1
+
+    qml = row[2]
+    root = ET.fromstring(qml[qml.index("<qgis"):])          # must be well-formed
+    sizes = sorted({float(o.get("value"))
+                    for o in root.findall(".//Option[@name='size']")})
+    expected = sorted({s * SCALE.m_per_px for s in SCALE.sizes_px[:r.dots["class"].max()]})
+    assert sizes == pytest.approx(expected)
+    units = {o.get("value") for o in root.findall(".//Option[@name='size_unit']")}
+    assert units == {"MapUnit"}
+    assert (tmp_path / "dots.qml").exists()

@@ -558,6 +558,36 @@ class _Measurements:
     overlaps: object          # (classes x classes) counts, or None
 
 
+def _containing_polygon(xy, geoms):
+    """For each point, the polygon it falls inside, or -1 if none."""
+    pts = shapely.points(xy)
+    pi, gi = shapely.STRtree(geoms).query(pts, predicate="within")
+    container = np.full(xy.shape[0], -1, dtype=np.int64)
+    container[pi[::-1]] = gi[::-1]                          # first match wins
+    return container
+
+
+def _value_inside(container, value, n_poly):
+    """Value of the dots that fall inside each polygon."""
+    placed = container >= 0
+    return np.bincount(container[placed], weights=value[placed], minlength=n_poly)
+
+
+def _step_measure_placement(dots: _Dots, data: _Input, run: _Progress):
+    """Value of the dots inside each polygon, before any promotion.
+
+    Promotion makes a dot worth 10 or 100 units, and a dot sits at the centre of
+    what it replaced, so one dot landing across a boundary moves its whole value
+    with it. That granularity swamps the per-polygon figures and hides how
+    accurately the dots were actually placed. Measuring here, while every dot is
+    still worth one unit, separates the two: this is placement error, and the
+    difference between this and the final figure is what promotion costs.
+    """
+    with run.step("placement"):
+        container = _containing_polygon(dots.xy, data.geoms)
+        return _value_inside(container, dots.value, data.n_poly)
+
+
 def _step_measure(dots: _Dots, points_xy, point_poly, data: _Input, scale: MapScale,
                   method: str, run: _Progress) -> _Measurements:
     """Where each dot's value came from, how far it drifted, what it overlaps."""
@@ -570,9 +600,7 @@ def _step_measure(dots: _Dots, points_xy, point_poly, data: _Input, scale: MapSc
                          / np.maximum(n_pts, 1))
 
         pts = shapely.points(dots.xy)
-        pi, gi = shapely.STRtree(data.geoms).query(pts, predicate="within")
-        container = np.full(dots.n, -1, dtype=np.int64)
-        container[pi[::-1]] = gi[::-1]                      # first match wins
+        container = _containing_polygon(dots.xy, data.geoms)
         inside = container == source
 
         displacement = np.zeros(dots.n)
@@ -587,6 +615,12 @@ def _step_measure(dots: _Dots, points_xy, point_poly, data: _Input, scale: MapSc
 # ------------------------------------------------------------------- outputs
 
 def _build_dots_frame(dots: _Dots, m: _Measurements, data: _Input, scale: MapScale, nudge_moved):
+    """The dot layer: what a map needs, and nothing else.
+
+    The per-dot diagnostics (purity, drift, spread, how far nudging moved it) are
+    for judging a run, not for drawing it, so they are summarised in the run
+    record rather than written onto every dot.
+    """
     import geopandas as gpd
     extra = {}
     if data.n_cat:
@@ -600,24 +634,22 @@ def _build_dots_frame(dots: _Dots, m: _Measurements, data: _Input, scale: MapSca
         "value": dots.value,
         "size_px": dots.sizes_px(scale),
         "source_id": data.ids[m.source],
-        "purity": np.round(m.purity, 4),
-        "inside_source": m.inside,
-        "displacement_px": np.round(m.displacement / scale.m_per_px, 3),
-        "spread_px": np.round(m.spread / scale.m_per_px, 3),
-        "nudge_px": np.round(nudge_moved / scale.m_per_px, 3),
         **extra,
     }, geometry=shapely.points(dots.xy), crs=data.crs)
 
 
-def _build_reconciliation(dots: _Dots, m: _Measurements, data: _Input, counts, method: str):
+def _build_reconciliation(dots: _Dots, m: _Measurements, data: _Input, counts, method: str,
+                          value_inside_before=None):
     """Per polygon: its value against the value of the dots that fall inside it."""
     placed = m.container >= 0
-    value_inside = np.bincount(m.container[placed], weights=dots.value[placed],
-                               minlength=data.n_poly)
+    value_inside = _value_inside(m.container, dots.value, data.n_poly)
     rec = pd.DataFrame({"id": data.ids, "value": data.values,
                         "points": counts if method != "random" else 0,
                         "value_of_dots_inside": value_inside,
                         "difference": value_inside - data.values})
+    if value_inside_before is not None:
+        rec["value_inside_before_promotion"] = value_inside_before
+        rec["difference_before_promotion"] = value_inside_before - data.values
     for c in range(int(dots.cls.max()) + 1):
         sel = placed & (dots.cls == c)
         rec[f"class{c + 1}_dots_inside"] = np.bincount(m.container[sel], minlength=data.n_poly)
@@ -630,8 +662,26 @@ def _build_reconciliation(dots: _Dots, m: _Measurements, data: _Input, counts, m
     return rec
 
 
+def _accuracy(difference, unit_value: float) -> dict:
+    """How far the dots inside each polygon are from its value, in dots."""
+    d = np.abs(np.asarray(difference, dtype=np.float64)) / unit_value
+    return {"median_dots": float(np.median(d)),
+            "p90_dots": float(np.percentile(d, 90)),
+            "max_dots": float(d.max()),
+            "within_half_a_dot": float((d < 0.5).mean()),
+            "within_one_dot": float((d < 1).mean())}
+
+
+def _spread(values, px: float) -> dict:
+    """Median, 90th percentile and worst of a per-dot measure, in pixels."""
+    v = np.asarray(values, dtype=np.float64) / px
+    return {"median_px": float(np.median(v)), "p90_px": float(np.percentile(v, 90)),
+            "max_px": float(v.max())}
+
+
 def _build_summary(dots: _Dots, m: _Measurements, data: _Input, rec, scale: MapScale,
-                   unit_value: float, ccvt_passes: int, promotions: list, nudge_info):
+                   unit_value: float, ccvt_passes: int, promotions: list, nudge_info,
+                   nudge_moved=None):
     total = dots.value.sum()
     outside = np.flatnonzero(~m.inside)
     px = scale.m_per_px
@@ -660,12 +710,33 @@ def _build_summary(dots: _Dots, m: _Measurements, data: _Input, rec, scale: MapS
         },
         "spread_px_max_by_class": {int(c + 1): float(m.spread[dots.cls == c].max() / px)
                                    for c in np.unique(dots.cls)},
+        # per-dot measures, summarised. They judge a run rather than draw it, so
+        # they are reported here instead of on every dot in the layer.
+        "per_dot": {
+            "spread_px": _spread(m.spread, px),
+            "displacement_px": _spread(m.displacement, px),
+            "nudge_px": (_spread(nudge_moved, px) if nudge_moved is not None else None),
+            "purity": {"median": float(np.median(m.purity)),
+                       "p10": float(np.percentile(m.purity, 10)),
+                       "min": float(m.purity.min())},
+            "dots_inside_source": int(np.count_nonzero(m.inside)),
+        },
         "overlapping_dots": ({f"class{i + 1}_with_class{j + 1}": int(m.overlaps[i, j])
                               for i in range(m.overlaps.shape[0])
                               for j in range(m.overlaps.shape[1])}
                              if m.overlaps is not None else None),
         "polygons_abs_difference_over_half_unit":
             int(np.count_nonzero(np.abs(rec["difference"]) > unit_value / 2)),
+        # how closely the dots inside each polygon account for its value. "placement"
+        # is measured before promotion, while every dot is worth one unit, so it
+        # isolates how well the dots were placed; "final" includes the granularity
+        # that promotion introduces, since one large dot carries its whole value
+        # across a boundary.
+        "accuracy": {
+            "placement": (_accuracy(rec["difference_before_promotion"], unit_value)
+                          if "difference_before_promotion" in rec else None),
+            "final": _accuracy(rec["difference"], unit_value),
+        },
     }
 
 
@@ -722,15 +793,17 @@ def make_dot_map(polygons, value, unit_value: float, scale: MapScale, k0: int = 
     dots, ccvt_passes = _step_blue_noise(points_xy, n_dots, unit_value, k0, method,
                                          rng, max_iterations, run)
     _step_assign_categories(dots, point_poly, data, rng, run)
+    value_inside_before = (_step_measure_placement(dots, data, run)
+                           if method == "graduated" else None)
     promotions = _step_promote(dots, scale, unit_value, group_radius, method,
                                rng, max_iterations, run, data.categories)
     nudge_moved, nudge_info = _step_nudge(dots, scale, nudge, nudge_max, rng, run)
     measured = _step_measure(dots, points_xy, point_poly, data, scale, method, run)
 
     frame = _build_dots_frame(dots, measured, data, scale, nudge_moved)
-    rec = _build_reconciliation(dots, measured, data, counts, method)
+    rec = _build_reconciliation(dots, measured, data, counts, method, value_inside_before)
     summary = _build_summary(dots, measured, data, rec, scale, unit_value,
-                             ccvt_passes, promotions, nudge_info)
+                             ccvt_passes, promotions, nudge_info, nudge_moved)
 
     timings = run.finish()
     run.say(f"[5] done: {dots.n:,} dots, "
