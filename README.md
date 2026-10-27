@@ -39,12 +39,17 @@ Python 3.9 or newer.
 Input: a polygon layer in an **equal area coordinate system**, with a column
 of counts for the dots (not rates or percentages).
 
+### Samnple data
+Sample data: the [latest release](https://github.com/nick-arnold/mapstippler/releases/tag/v0.7.4)
+has Oregon and Indiana census tracts with population (2024 TIGER, ACS 5-year
+estimates) in ESRI:102008. The commands below assume `oregon_tracts.parquet`.
+
 ### Choose a unit value
 
 `advise` estimates a range of unit values without placing dots:
 
 ```
-mapstippler advise tracts.parquet --value population --mpp 500
+mapstippler advise oregon_tracts.parquet --value population --mpp 500
 ```
 
 ```
@@ -61,7 +66,7 @@ about 1,200 pixels; 500 suits a state; 60 suits a city.
 ### Make the map
 
 ```
-mapstippler dots tracts.parquet --value population --unit 1000 --mpp 500 \
+mapstippler dots oregon_tracts.parquet --value population --unit 1000 --mpp 500 \
     --id geoid --nudge all --out [file] --preview
 ```
 
@@ -71,8 +76,8 @@ instead, which is smaller.
 ### Other methods
 
 ```
-mapstippler dots tracts.parquet --value population --unit 1000 --mpp 500 --method blue
-mapstippler dots tracts.parquet --value population --unit 1000 --mpp 500 --method random
+mapstippler dots oregon_tracts.parquet --value population --unit 1000 --mpp 500 --method blue
+mapstippler dots oregon_tracts.parquet --value population --unit 1000 --mpp 500 --method random
 ```
 
 `blue` is one dot size in a blue noise pattern. `random` is pseudo-random placement.
@@ -88,7 +93,7 @@ mapstippler dots counties.parquet --value [field 1] [field 2] --unit 10000 --mpp
 ### A single feature
 
 ```
-mapstippler dots tracts.parquet --value population --unit 1000 --mpp 500 \
+mapstippler dots oregon_tracts.parquet --value population --unit 1000 --mpp 500 \
     --where "statefp == '41'" --out [file] --preview
 ```
 
@@ -99,7 +104,7 @@ import geopandas as gpd
 from mapstippler import MapScale, make_dot_map
 from mapstippler.output import write_outputs
 
-polygons = gpd.read_parquet("tracts.parquet")
+polygons = gpd.read_parquet("oregon_tracts.parquet")
 result = make_dot_map(polygons, "population", unit_value=1000,
                       scale=MapScale(500.0), id_column="geoid", nudge="all")
 
