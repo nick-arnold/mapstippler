@@ -13,3 +13,4 @@ examples/*.png
 !examples/fast_vs_baseline.png
 !examples/pooling_comparison.png
 data/
+.DS_Store
