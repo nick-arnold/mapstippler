@@ -6,11 +6,11 @@
 **What changed.** The optimizer was rewritten following Li et al. (2010) and
 Ahmed & Deussen (2017): sites only exchange points with their Delaunay
 neighbours rather than all points. 
----
+
 ## Pseudo random points per dot from 2 to 16
 
 **What changed.** The default number of pseudo-random points per dot went from 2 to 16 to reduce clumping the initial set of dots.
----
+
 
 ## Promotion: per-group instead of global
 
@@ -21,7 +21,7 @@ linking radius of each other and each group gets its own constrained CCVT run.
 **Why.** A dot always lands at the centroid of the points it owns. Under global
 pooling, one larger dot can be built from touching dots in two distant towns, and
 it then lands somewhere between them, on empty ground. 
----
+
 
 ## Exact dot values and leftovers
 
@@ -32,7 +32,7 @@ their own class.
 **Why.** Balzer's implementation allows capacities to differ by one, and pooled
 nationally that is harmless. Per group it is not: a group of 14 promoted as a
 single dot would make that dot worth 1.4 times its stated value. 
----
+
 
 ## Nudging overlapping dots
 
@@ -43,7 +43,7 @@ in proportion to their area.
 **Why.** The paper lists large-on-small overlap as unresolved (section 5): the
 CCVT that places a class knows nothing about the dots of other classes already on
 the map. Leftovers (section 5 above) can also touch.
----
+
 
 ## The unit value advisor
 
