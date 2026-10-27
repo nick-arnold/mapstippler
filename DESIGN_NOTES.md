@@ -40,17 +40,9 @@ single dot would make that dot worth 1.4 times its stated value.
 the largest class only or `all` for every class, with larger dots harder to move
 in proportion to their area.
 
-**Why.** The paper lists large-on-small overlap as unresolved (section 5): the
-CCVT that places a class knows nothing about the dots of other classes already on
-the map. Leftovers (section 5 above) can also touch.
-
-
 ## The unit value advisor
 
 **What it is.** A preview, before any dots are placed, of what candidate unit
 values would do at the chosen scale and dot sizes.
 
-**Why.** The paper notes that unit value and dot size must be chosen together
-(section 2, citing Mackay 1949), but leaves the choice to the cartographer with
-no way to see the consequences without making the map.
 
