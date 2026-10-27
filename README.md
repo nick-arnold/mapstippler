@@ -42,7 +42,7 @@ of counts for the dots (not rates or percentages).
 ### Sample data
 Sample data: the [latest release](https://github.com/nick-arnold/mapstippler/releases/tag/v0.7.4)
 has Oregon and Indiana census tracts with population (2024 TIGER, ACS 5-year
-estimates) in ESRI:102008. The commands below assume `oregon_tracts.parquet`.
+estimates) in ESRI:102008.
 
 ### Choose a unit value
 
